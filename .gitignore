@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+
+# 数据文件
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# 模型文件
+models/checkpoints/*
+*.bin
+*.safetensors
+*.pth
+
+# 日志
+outputs/logs/*
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# 大文件
+*.parquet
+*.arrow
+
+# HuggingFace cache
+.cache/
+data/jsonl/*.jsonl
+outputs/comparison_*/

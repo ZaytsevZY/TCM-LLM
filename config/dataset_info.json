@@ -1,0 +1,20 @@
+{
+  "tcm_train": {
+    "file_name": "../data/jsonl/train.jsonl",
+    "formatting": "alpaca",
+    "columns": {
+      "prompt": "instruction",
+      "query": "input",
+      "response": "output"
+    }
+  },
+  "tcm_train_30p": {
+    "file_name": "../data/jsonl/train_30p.jsonl",
+    "formatting": "alpaca",
+    "columns": {
+      "prompt": "instruction",
+      "query": "input",
+      "response": "output"
+    }
+  }
+}

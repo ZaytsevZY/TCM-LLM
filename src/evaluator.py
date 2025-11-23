@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-评测工具类（支持并发）
-支持本地LoRA模型和API两种评测方式
+评测工具类（支持并发 + CoT答案提取）
 """
 import json
 import time
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -18,15 +17,7 @@ class ModelEvaluator:
     """模型评测器"""
     
     def __init__(self, mode="local", model_path=None, lora_path=None, api_config=None):
-        """
-        初始化评测器
-        
-        Args:
-            mode: "local" (本地LoRA模型) 或 "api" (API评测)
-            model_path: 基座模型路径
-            lora_path: LoRA模型路径
-            api_config: API配置字典
-        """
+        """初始化评测器"""
         self.mode = mode
         
         if mode == "local":
@@ -64,17 +55,7 @@ class ModelEvaluator:
             print("✓ API配置完成")
     
     def generate(self, prompt: str, max_tokens: int = 2048, temperature: float = 0.1) -> str:
-        """
-        生成回答
-        
-        Args:
-            prompt: 输入prompt
-            max_tokens: 最大生成token数
-            temperature: 温度参数
-            
-        Returns:
-            生成的文本
-        """
+        """生成回答"""
         if self.mode == "local":
             return self._generate_local(prompt, max_tokens, temperature)
         elif self.mode == "api":
@@ -96,7 +77,6 @@ class ModelEvaluator:
                 eos_token_id=self.tokenizer.eos_token_id
             )
         
-        # 只返回生成的部分
         generated_text = self.tokenizer.decode(
             outputs[0][len(inputs.input_ids[0]):],
             skip_special_tokens=True
@@ -117,7 +97,7 @@ class ModelEvaluator:
                 return response.choices[0].message.content.strip()
             except Exception as e:
                 if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)  # 指数退避
+                    time.sleep(2 ** attempt)
                     continue
                 else:
                     print(f"API调用失败: {e}")
@@ -127,7 +107,8 @@ class ModelEvaluator:
         self,
         item: Dict[str, Any],
         prompt_builder,
-        max_tokens: int
+        max_tokens: int,
+        is_cot: bool = False
     ) -> Dict[str, Any]:
         """
         评测单个样本
@@ -136,6 +117,7 @@ class ModelEvaluator:
             item: 单个评测样本
             prompt_builder: prompt构建函数
             max_tokens: 最大生成token数
+            is_cot: 是否是CoT模式（需要提取答案）
             
         Returns:
             评测结果
@@ -146,20 +128,37 @@ class ModelEvaluator:
         prompt = prompt_builder(item["full_question"])
         
         # 生成回答
-        prediction = self.generate(prompt, max_tokens=max_tokens)
+        raw_prediction = self.generate(prompt, max_tokens=max_tokens)
         
         inference_time = time.time() - start_time
         
-        # 返回结果
-        result = {
-            "id": item["id"],
-            "instruction": item["instruction"],
-            "input": item["input"],
-            "full_question": item["full_question"],
-            "reference": item["output"],
-            "prediction": prediction,
-            "inference_time": inference_time
-        }
+        # 如果是CoT，提取答案标签
+        if is_cot:
+            from src.prompt_builder import extract_answer_from_cot
+            extracted_answer, has_tags = extract_answer_from_cot(raw_prediction)
+            
+            result = {
+                "id": item["id"],
+                "instruction": item["instruction"],
+                "input": item["input"],
+                "full_question": item["full_question"],
+                "reference": item["output"],
+                "raw_prediction": raw_prediction,  # 保存完整输出
+                "prediction": extracted_answer,     # 用于评测的答案
+                "has_answer_tags": has_tags,        # 是否包含标签
+                "inference_time": inference_time
+            }
+        else:
+            # 零样本模式，直接使用原始输出
+            result = {
+                "id": item["id"],
+                "instruction": item["instruction"],
+                "input": item["input"],
+                "full_question": item["full_question"],
+                "reference": item["output"],
+                "prediction": raw_prediction,
+                "inference_time": inference_time
+            }
         
         return result
     
@@ -169,7 +168,8 @@ class ModelEvaluator:
         prompt_builder,
         mode_name: str,
         max_tokens: int = 2048,
-        num_workers: int = 1
+        num_workers: int = 1,
+        is_cot: bool = False
     ) -> List[Dict[str, Any]]:
         """
         批量评测（支持并发）
@@ -177,9 +177,10 @@ class ModelEvaluator:
         Args:
             eval_data: 评测数据列表
             prompt_builder: prompt构建函数
-            mode_name: 评测模式名称（"zero_shot"或"cot"）
+            mode_name: 评测模式名称
             max_tokens: 最大生成token数
-            num_workers: 并发线程数（仅API模式有效）
+            num_workers: 并发线程数
+            is_cot: 是否是CoT模式
             
         Returns:
             评测结果列表
@@ -188,19 +189,25 @@ class ModelEvaluator:
         
         print(f"\n🔄 开始{mode_name}评测 ({len(eval_data)}条)...")
         print(f"并发数: {num_workers}")
+        if is_cot:
+            print("⚠️  CoT模式：将提取<答案>标签中的内容进行评测")
         
         if self.mode == "api" and num_workers > 1:
-            # API模式使用并发
             results = self._batch_evaluate_parallel(
-                eval_data, prompt_builder, mode_name, max_tokens, num_workers
+                eval_data, prompt_builder, mode_name, max_tokens, num_workers, is_cot
             )
         else:
-            # 本地模式或单线程
             results = self._batch_evaluate_sequential(
-                eval_data, prompt_builder, mode_name, max_tokens
+                eval_data, prompt_builder, mode_name, max_tokens, is_cot
             )
         
-        print(f"✓ {mode_name}评测完成")
+        # 统计CoT标签使用情况
+        if is_cot:
+            has_tags_count = sum(1 for r in results if r.get('has_answer_tags', False))
+            print(f"✓ {mode_name}评测完成 - {has_tags_count}/{len(results)} 条使用了答案标签")
+        else:
+            print(f"✓ {mode_name}评测完成")
+        
         return results
     
     def _batch_evaluate_sequential(
@@ -208,12 +215,13 @@ class ModelEvaluator:
         eval_data: List[Dict[str, Any]],
         prompt_builder,
         mode_name: str,
-        max_tokens: int
+        max_tokens: int,
+        is_cot: bool
     ) -> List[Dict[str, Any]]:
         """串行评测"""
         results = []
         for item in tqdm(eval_data, desc=f"{mode_name}评测"):
-            result = self._evaluate_single(item, prompt_builder, max_tokens)
+            result = self._evaluate_single(item, prompt_builder, max_tokens, is_cot)
             results.append(result)
         return results
     
@@ -223,24 +231,24 @@ class ModelEvaluator:
         prompt_builder,
         mode_name: str,
         max_tokens: int,
-        num_workers: int
+        num_workers: int,
+        is_cot: bool
     ) -> List[Dict[str, Any]]:
         """并行评测（API模式）"""
         results = [None] * len(eval_data)
         
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            # 提交所有任务
             future_to_idx = {
                 executor.submit(
                     self._evaluate_single, 
                     item, 
                     prompt_builder, 
-                    max_tokens
+                    max_tokens,
+                    is_cot
                 ): idx
                 for idx, item in enumerate(eval_data)
             }
             
-            # 使用tqdm显示进度
             with tqdm(total=len(eval_data), desc=f"{mode_name}评测(并发)") as pbar:
                 for future in as_completed(future_to_idx):
                     idx = future_to_idx[future]
@@ -249,7 +257,6 @@ class ModelEvaluator:
                         results[idx] = result
                     except Exception as e:
                         print(f"\n样本 {idx} 评测失败: {e}")
-                        # 创建失败结果
                         results[idx] = {
                             "id": eval_data[idx]["id"],
                             "prediction": "",

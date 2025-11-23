@@ -1,16 +1,112 @@
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import numpy as np
 import pandas as pd
 from matplotlib import rcParams
 import seaborn as sns
+import sys
 
-# 设置中文字体
-rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS', 'DejaVu Sans']
-rcParams['axes.unicode_minus'] = False
+def check_available_fonts():
+    """检查系统中可用的中文字体"""
+    print("\n" + "="*60)
+    print("正在检查系统可用字体...")
+    print("="*60)
+    
+    # 获取所有字体
+    font_list = fm.fontManager.ttflist
+    
+    # 常见的中文字体名称关键词
+    chinese_keywords = ['Chinese', 'CN', 'Hei', 'Song', 'Ming', 'Kai', 
+                       'SimHei', 'SimSun', 'Microsoft YaHei', 'PingFang',
+                       'STHeiti', 'STSong', 'STKaiti', 'STFangsong',
+                       'Noto', 'WenQuanYi', 'AR PL', 'Droid']
+    
+    chinese_fonts = []
+    
+    for font in font_list:
+        font_name = font.name
+        # 检查是否包含中文字体关键词
+        if any(keyword.lower() in font_name.lower() for keyword in chinese_keywords):
+            chinese_fonts.append((font_name, font.fname))
+    
+    # 去重
+    chinese_fonts = list(set(chinese_fonts))
+    chinese_fonts.sort()
+    
+    print(f"\n找到 {len(chinese_fonts)} 个可能的中文字体：\n")
+    for i, (name, path) in enumerate(chinese_fonts[:20], 1):  # 只显示前20个
+        print(f"{i:2d}. {name}")
+        print(f"    路径: {path}")
+    
+    if len(chinese_fonts) > 20:
+        print(f"\n... 还有 {len(chinese_fonts) - 20} 个字体未显示")
+    
+    return chinese_fonts
 
-# 设置绘图风格
-plt.style.use('seaborn-v0_8-darkgrid')
-sns.set_palette("husl")
+def select_best_font(chinese_fonts):
+    """选择最佳的中文字体"""
+    # 优先级列表
+    priority_fonts = [
+        'SimHei',
+        'Microsoft YaHei',
+        'PingFang SC',
+        'STHeiti',
+        'Noto Sans CJK SC',
+        'WenQuanYi Zen Hei',
+        'AR PL UMing CN',
+        'Droid Sans Fallback'
+    ]
+    
+    # 首先检查优先字体
+    for priority_font in priority_fonts:
+        for font_name, font_path in chinese_fonts:
+            if priority_font.lower() in font_name.lower():
+                print(f"\n✓ 选择字体: {font_name}")
+                print(f"  路径: {font_path}")
+                return font_name
+    
+    # 如果没有优先字体，选择第一个可用的
+    if chinese_fonts:
+        font_name = chinese_fonts[0][0]
+        print(f"\n✓ 选择字体: {font_name}")
+        print(f"  路径: {chinese_fonts[0][1]}")
+        return font_name
+    
+    # 如果没有找到任何中文字体
+    print("\n⚠ 警告: 未找到中文字体，将使用默认字体（可能无法正常显示中文）")
+    return None
+
+def setup_matplotlib_font(font_name=None):
+    """配置matplotlib字体"""
+    if font_name:
+        rcParams['font.sans-serif'] = [font_name, 'DejaVu Sans']
+    else:
+        # 尝试通用设置
+        rcParams['font.sans-serif'] = ['DejaVu Sans']
+    
+    rcParams['axes.unicode_minus'] = False
+    
+    # 设置绘图风格
+    plt.style.use('seaborn-v0_8-darkgrid')
+    sns.set_palette("husl")
+    
+    print("\n✓ Matplotlib字体配置完成")
+
+def test_chinese_display(font_name):
+    """测试中文显示"""
+    print("\n正在测试中文显示...")
+    
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.text(0.5, 0.5, '中文测试 Test 123', 
+           ha='center', va='center', fontsize=20)
+    ax.set_title(f'字体测试: {font_name if font_name else "默认字体"}', fontsize=14)
+    ax.axis('off')
+    
+    plt.savefig('font_test.png', dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    print("✓ 字体测试完成，已生成 font_test.png")
+    print("  请检查该文件确认中文是否正常显示")
 
 def create_all_figures():
     """创建论文中的所有图表"""
@@ -414,5 +510,31 @@ def create_all_figures():
     for i, f in enumerate(files, 1):
         print(f"  {i}. {f}")
 
-if __name__ == "__main__":
+def main():
+    """主函数"""
+    print("\n" + "="*60)
+    print("论文图表生成工具")
+    print("="*60)
+    
+    # 1. 检查可用字体
+    chinese_fonts = check_available_fonts()
+    
+    # 2. 选择最佳字体
+    best_font = select_best_font(chinese_fonts)
+    
+    # 3. 配置matplotlib
+    setup_matplotlib_font(best_font)
+    
+    # 4. 测试中文显示
+    test_chinese_display(best_font)
+    
+    # 5. 生成所有图表
+    print("\n" + "="*60)
     create_all_figures()
+    
+    print("\n" + "="*60)
+    print("所有任务完成！")
+    print("="*60)
+
+if __name__ == "__main__":
+    main()
